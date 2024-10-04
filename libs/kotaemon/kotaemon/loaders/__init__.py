@@ -8,6 +8,7 @@ from .html_loader import HtmlReader, MhtmlReader
 from .mathpix_loader import MathpixPDFReader
 from .ocr_loader import ImageReader, OCRReader
 from .pdf_loader import PDFThumbnailReader
+from .mineru_document_loader import MinerUDocumentReader
 from .txt_loader import TxtReader
 from .unstructured_loader import UnstructuredReader
 
@@ -28,4 +29,5 @@ __all__ = [
     "AdobeReader",
     "TxtReader",
     "PDFThumbnailReader",
+    "MinerUDocumentReader",
 ]
