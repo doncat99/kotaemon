@@ -1,5 +1,3 @@
-
-
 import os
 from io import BytesIO
 import base64
@@ -7,15 +5,18 @@ import json
 import copy
 import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from PIL import Image
+from fsspec import AbstractFileSystem
+from llama_index.core.schema import Document
 
 from magic_pdf.pipe.UNIPipe import UNIPipe
 from magic_pdf.pipe.OCRPipe import OCRPipe
 from magic_pdf.pipe.TXTPipe import TXTPipe
 from magic_pdf.rw.DiskReaderWriter import DiskReaderWriter
-from llama_index.core.schema import Document
+import magic_pdf.model as model_config
+model_config.__use_inside_model__ = True
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -56,7 +57,7 @@ def get_page_thumbnails(file_path: Path, pages: List[int], dpi: int = 80) -> Lis
 class MinerUDocumentReader:
     """Wrapper to process PDFs using MinerU and convert the output into `llama_index` Document format."""
 
-    def __init__(self, output_dir: str, generate_thumbnails: bool = False):
+    def __init__(self):
         """
         Initialize the MinerUDocumentReader.
 
@@ -64,14 +65,16 @@ class MinerUDocumentReader:
             output_dir (str): Directory to store intermediate files and parsed outputs.
             generate_thumbnails (bool, optional): Whether to generate page thumbnails. Defaults to False.
         """
-        self.output_dir = Path(output_dir)
-        self.generate_thumbnails = generate_thumbnails
+        self.output_dir = "./"
+        self.generate_thumbnails = True
 
-    def extract_content(
-        self, pdf_path: str, parse_method: str = 'auto', model_json_path: str = None, is_json_md_dump: bool = True
-    ) -> Dict[str, Any]:
+    def load_data(
+        self, pdf_path: Path,
+        extra_info: Optional[Dict] = None,
+        fs: Optional[AbstractFileSystem] = None,
+    ) -> List[Document]:
         """
-        Extract the content of a PDF file using MinerU's extraction pipelines.
+        Extract the content of a PDF file using MinerU's extraction pipelines and convert to `Document` format.
 
         Args:
             pdf_path (str): Path to the PDF file.
@@ -80,47 +83,36 @@ class MinerUDocumentReader:
             is_json_md_dump (bool, optional): Whether to output JSON and Markdown results. Defaults to True.
 
         Returns:
-            Dict[str, Any]: Parsed content list, raw JSON, and image paths.
+            List[Document]: List of `Document` objects in `llama_index` format.
         """
+        parse_method = 'auto'
+        model_json_path = None
+        is_json_md_dump = False
+        
         try:
             output_paths = self._generate_output_paths(pdf_path)
-            content_list, raw_json, pages_image = self._run_mineru_pipeline(
+            content_list = self._run_mineru_pipeline(
                 pdf_path, parse_method, model_json_path, is_json_md_dump, output_paths
             )
 
-            # Generate thumbnails if enabled
-            thumbnails = []
-            if self.generate_thumbnails:
-                pages = [item.get("page_idx", 0) for item in content_list if item.get("type") == "text"]
-                thumbnails = get_page_thumbnails(Path(pdf_path), pages)
+            # Convert content list to llama_index Documents
+            documents = self._convert_to_documents(content_list)
 
-            return {
-                "content_list": content_list,
-                "raw_json": raw_json,
-                "pages_image": pages_image,
-                "thumbnails": thumbnails
-            }
+            # Optionally generate thumbnails for each page
+            if self.generate_thumbnails:
+                thumbnails = get_page_thumbnails(Path(pdf_path), [item.get("page_idx", 0) for item in content_list])
+                self._append_thumbnails(documents, thumbnails)
+
+            return documents
 
         except Exception as e:
             logger.exception(f"Error processing PDF '{pdf_path}': {e}")
-            return {}
+            return []
 
     def _run_mineru_pipeline(
         self, pdf_path: str, parse_method: str, model_json_path: str, is_json_md_dump: bool, output_paths: Dict[str, str]
     ) -> tuple:
-        """
-        Run the MinerU processing pipeline on a PDF file.
-
-        Args:
-            pdf_path (str): Path to the PDF file.
-            parse_method (str): Method to use ('auto', 'ocr', or 'txt').
-            model_json_path (str): Path to the pre-trained model JSON file.
-            is_json_md_dump (bool): Whether to output JSON and Markdown results.
-            output_paths (Dict[str, str]): Generated paths for output storage.
-
-        Returns:
-            tuple: content_list, raw_json, pages_image.
-        """
+        """Run the MinerU processing pipeline on a PDF file."""
         pdf_name = os.path.basename(pdf_path).split(".")[0]
         pdf_bytes = open(pdf_path, "rb").read()
 
@@ -130,7 +122,7 @@ class MinerUDocumentReader:
 
         # Select the pipeline based on the parse method
         if parse_method == "auto":
-            model_json = self._load_model_json(model_json_path)
+            model_json = self._load_model_json(model_json_path) if model_json_path else []
             pipe = UNIPipe(pdf_bytes, {"_pdf_type": "", "model_list": model_json}, image_writer)
         elif parse_method == "txt":
             pipe = TXTPipe(pdf_bytes, [], image_writer)
@@ -145,11 +137,29 @@ class MinerUDocumentReader:
 
         # Generate content list and optional Markdown outputs
         content_list = pipe.pipe_mk_uni_format(os.path.basename(output_paths['images']), drop_mode="none")
-        if is_json_md_dump:
-            md_content = pipe.pipe_mk_markdown(os.path.basename(output_paths['images']), drop_mode="none")
-            self.json_md_dump(pipe, md_writer, pdf_name, content_list, md_content)
+        # if is_json_md_dump:
+        md_content = pipe.pipe_mk_markdown(os.path.basename(output_paths['images']), drop_mode="none")
+        self.json_md_dump(pipe, md_writer, pdf_name, content_list, md_content)
 
-        return content_list, json.dumps(pipe.pdf_mid_data, ensure_ascii=False, indent=4), []
+        return content_list
+
+    def _convert_to_documents(self, content_list: List[Dict[str, Any]]) -> List[Document]:
+        """Convert parsed content into `llama_index` Documents."""
+        documents = []
+        for item in content_list:
+            text_content = item.get("text", "")
+            page_idx = item.get("page_idx", 0)
+            if text_content:
+                metadata = {"type": item.get("type", "text"), "page_idx": page_idx, "source": "MinerU"}
+                documents.append(Document(text=text_content, metadata=metadata))
+
+        return documents
+
+    def _append_thumbnails(self, documents: List[Document], thumbnails: List[str]):
+        """Append thumbnails to the corresponding documents."""
+        for doc, thumbnail in zip(documents, thumbnails):
+            if doc.metadata.get("type") == "text":
+                doc.metadata["thumbnail"] = thumbnail
 
     def _generate_output_paths(self, pdf_path: str) -> Dict[str, str]:
         """Generate output paths for the extracted content."""
