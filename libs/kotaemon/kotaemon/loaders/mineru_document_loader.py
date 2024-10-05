@@ -120,9 +120,9 @@ class MinerUDocumentReader:
         image_writer = DiskReaderWriter(output_paths['images'])
         md_writer = DiskReaderWriter(output_paths['base'])
 
+        model_json = self._load_model_json(model_json_path) if model_json_path else []
         # Select the pipeline based on the parse method
         if parse_method == "auto":
-            model_json = self._load_model_json(model_json_path) if model_json_path else []
             pipe = UNIPipe(pdf_bytes, {"_pdf_type": "", "model_list": model_json}, image_writer)
         elif parse_method == "txt":
             pipe = TXTPipe(pdf_bytes, [], image_writer)
@@ -133,13 +133,21 @@ class MinerUDocumentReader:
 
         # Classify and parse the document
         pipe.pipe_classify()
+        """如果没有传入有效的模型数据，则使用内置model解析"""
+        if len(model_json) == 0:
+            if model_config.__use_inside_model__:
+                pipe.pipe_analyze()
+            else:
+                logger.error("need model list input")
+                exit(1)
         pipe.pipe_parse()
-
+    
+    
         # Generate content list and optional Markdown outputs
         content_list = pipe.pipe_mk_uni_format(os.path.basename(output_paths['images']), drop_mode="none")
-        # if is_json_md_dump:
-        md_content = pipe.pipe_mk_markdown(os.path.basename(output_paths['images']), drop_mode="none")
-        self.json_md_dump(pipe, md_writer, pdf_name, content_list, md_content)
+        if is_json_md_dump:
+            md_content = pipe.pipe_mk_markdown(os.path.basename(output_paths['images']), drop_mode="none")
+            self.json_md_dump(pipe, md_writer, pdf_name, content_list, md_content)
 
         return content_list
 
