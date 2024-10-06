@@ -32,7 +32,7 @@ def convert_image_to_base64(img: Image.Image, format: str = "PNG") -> str:
     return f"data:image/{format.lower()};base64,{img_base64}"
 
 
-def get_page_thumbnails(file_path: Path, pages: List[int], dpi: int = 80) -> List[str]:
+def get_page_thumbnails(file_path: Path, dpi: int = 80) -> List[str]:
     """Generate base64 thumbnails for specific pages in the PDF."""
     try:
         import fitz  # PyMuPDF
@@ -41,14 +41,13 @@ def get_page_thumbnails(file_path: Path, pages: List[int], dpi: int = 80) -> Lis
 
     doc = fitz.open(str(file_path))
     thumbnails = []
-    for page_number in pages:
+    for page in doc:
         try:
-            page = doc.load_page(page_number)
             pixmap = page.get_pixmap(dpi=dpi)
             img = Image.frombytes("RGB", [pixmap.width, pixmap.height], pixmap.samples)
             thumbnails.append(convert_image_to_base64(img))
         except Exception as e:
-            logger.warning(f"Failed to process page {page_number}: {e}")
+            logger.warning(f"Failed to process page {page.number}: {e}")
             thumbnails.append("Image not available")
     doc.close()
     return thumbnails
@@ -101,7 +100,7 @@ class MinerUDocumentReader:
 
             # Optionally generate thumbnails for each page
             if self.generate_thumbnails:
-                thumbnails = get_page_thumbnails(Path(pdf_path), [item.get("page_idx", 0) for item in content_list])
+                thumbnails = get_page_thumbnails(Path(pdf_path))
                 self._append_thumbnails(documents, thumbnails)
 
             return documents
@@ -183,7 +182,7 @@ class MinerUDocumentReader:
                     pages_content[page_idx] += text + " "
 
             for page_idx, page_data in pages_content.items():
-                metadata = {"page_label": "", "file_name": pdf_name}
+                metadata = {"page_label": page_idx, "file_name": pdf_name}
                 if extra_info is not None:
                     metadata.update(extra_info)
                 documents.append(Document(text=page_data, metadata=metadata))
