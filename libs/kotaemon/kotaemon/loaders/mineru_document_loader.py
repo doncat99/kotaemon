@@ -57,7 +57,7 @@ def get_page_thumbnails(file_path: Path, pages: List[int], dpi: int = 80) -> Lis
 class MinerUDocumentReader:
     """Wrapper to process PDFs using MinerU and convert the output into `llama_index` Document format."""
 
-    def __init__(self):
+    def __init__(self, return_full_document: Optional[bool] = False):
         """
         Initialize the MinerUDocumentReader.
 
@@ -67,6 +67,7 @@ class MinerUDocumentReader:
         """
         self.output_dir = "./"
         self.generate_thumbnails = True
+        self.return_full_document = return_full_document
 
     def load_data(
         self, pdf_path: Path,
@@ -88,15 +89,15 @@ class MinerUDocumentReader:
         parse_method = 'auto'
         model_json_path = None
         is_json_md_dump = False
-        
+
         try:
             output_paths = self._generate_output_paths(pdf_path)
-            content_list = self._run_mineru_pipeline(
+            pdf_name, content_list = self._run_mineru_pipeline(
                 pdf_path, parse_method, model_json_path, is_json_md_dump, output_paths
             )
 
             # Convert content list to llama_index Documents
-            documents = self._convert_to_documents(content_list)
+            documents = self._convert_to_documents(pdf_name, extra_info, content_list)
 
             # Optionally generate thumbnails for each page
             if self.generate_thumbnails:
@@ -141,25 +142,51 @@ class MinerUDocumentReader:
                 logger.error("need model list input")
                 exit(1)
         pipe.pipe_parse()
-    
-    
+
         # Generate content list and optional Markdown outputs
         content_list = pipe.pipe_mk_uni_format(os.path.basename(output_paths['images']), drop_mode="none")
         if is_json_md_dump:
             md_content = pipe.pipe_mk_markdown(os.path.basename(output_paths['images']), drop_mode="none")
             self.json_md_dump(pipe, md_writer, pdf_name, content_list, md_content)
 
-        return content_list
+        return pdf_name, content_list
 
-    def _convert_to_documents(self, content_list: List[Dict[str, Any]]) -> List[Document]:
+    def _convert_to_documents(self, pdf_name, extra_info, content_list: List[Dict[str, Any]]) -> List[Document]:
         """Convert parsed content into `llama_index` Documents."""
         documents = []
-        for item in content_list:
-            text_content = item.get("text", "")
-            page_idx = item.get("page_idx", 0)
-            if text_content:
-                metadata = {"type": item.get("type", "text"), "page_idx": page_idx, "source": "MinerU"}
-                documents.append(Document(text=text_content, metadata=metadata))
+
+        if self.return_full_document:
+            metadata = {"file_name": pdf_name}
+
+            if extra_info is not None:
+                metadata.update(extra_info)
+
+            # Join text extracted from each page
+            text = "\n".join(
+                item.get("text", "") for item in content_list if item.get("text", "")
+            )
+            documents.append(Document(text=text, metadata=metadata))
+
+        # This block returns each page of a PDF as its own Document
+        else:
+            # Iterate over every page
+
+            pages_content = {}
+            for item in content_list:
+                page_idx = item.get("page_idx", 0)
+                text = item.get("text", "")
+
+                if page_idx not in pages_content:
+                    pages_content[page_idx] = ""
+
+                if text:
+                    pages_content[page_idx] += text + " "
+
+            for page_idx, page_data in pages_content.items():
+                metadata = {"page_label": "", "file_name": pdf_name}
+                if extra_info is not None:
+                    metadata.update(extra_info)
+                documents.append(Document(text=page_data, metadata=metadata))
 
         return documents
 

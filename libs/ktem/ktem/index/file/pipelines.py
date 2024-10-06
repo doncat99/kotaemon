@@ -269,16 +269,12 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
             kwargs: other arguments
         """
         use_llm_reranking = user_settings.get("use_llm_reranking", False)
-
+        embedding_model_name = embedding_models_manager.get_default_name() if index_settings.get("embedding") == 'default' else index_settings.get("embedding")
         retriever = cls(
             get_extra_table=user_settings["prioritize_table"],
             top_k=user_settings["num_retrieval"],
             mmr=user_settings["mmr"],
-            embedding=embedding_models_manager[
-                index_settings.get(
-                    "embedding", embedding_models_manager.get_default_name()
-                )
-            ],
+            embedding=embedding_models_manager[embedding_model_name],
             retrieval_mode=user_settings["retrieval_mode"],
             llm_scorer=(LLMTrulensScoring() if use_llm_reranking else None),
             rerankers=[
@@ -647,12 +643,9 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
     def get_pipeline(cls, user_settings, index_settings) -> BaseFileIndexIndexing:
         use_quick_index_mode = user_settings.get("quick_index_mode", False)
         print("use_quick_index_mode", use_quick_index_mode)
+        embedding_model_name = embedding_models_manager.get_default_name() if index_settings.get("embedding") == 'default' else index_settings.get("embedding")
         obj = cls(
-            embedding=embedding_models_manager[
-                index_settings.get(
-                    "embedding", embedding_models_manager.get_default_name()
-                )
-            ],
+            embedding=embedding_models_manager[embedding_model_name],
             run_embedding_in_thread=use_quick_index_mode,
             reader_mode=user_settings.get("reader_mode", "default"),
         )
